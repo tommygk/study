@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>交易日记 · Trade Journal</title>
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">TJ</span>
+    <div>
+      <h1>交易日记</h1>
+      <p class="sub">先写条件，再开仓 · 关仓之后才结算得失</p>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <div class="kpi" id="kpiDiscipline" title="守规矩笔数 / 已关仓且已复盘笔数">
+      <span class="kpi-label">纪律率</span>
+      <span class="kpi-value" id="kpiDisciplineVal">—</span>
+    </div>
+    <div class="kpi" id="kpiPnl" title="已关仓交易合计盈亏">
+      <span class="kpi-label">累计盈亏</span>
+      <span class="kpi-value" id="kpiPnlVal">—</span>
+    </div>
+    <button class="btn primary" id="btnNew">＋ 开仓</button>
+    <button class="btn ghost" id="btnClosePos">关仓 <span class="badge" id="openBadge">0</span></button>
+    <div class="menu-wrap">
+      <button class="btn ghost" id="btnMenu">数据 ▾</button>
+      <div class="menu hidden" id="dataMenu">
+        <button data-act="export-json">导出备份 (JSON)</button>
+        <button data-act="import-json">导入备份 (JSON)</button>
+        <button data-act="export-csv">导出表格 (CSV)</button>
+        <button data-act="demo">载入演示数据</button>
+        <button data-act="clear" class="danger">清空全部记录</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-view="records">交易记录</button>
+  <button class="tab" data-view="review">月度复盘</button>
+  <button class="tab" data-view="insight">状态洞察</button>
+</nav>
+
+<main>
+  <!-- ============ 交易记录 ============ -->
+  <section class="view active" id="view-records">
+    <div class="toolbar">
+      <div class="filters">
+        <select id="filterMonth"><option value="">全部月份</option></select>
+        <select id="filterCat">
+          <option value="">全部归类</option>
+          <option value="A">A 守规矩赚的</option>
+          <option value="B">B 守规矩亏的</option>
+          <option value="C">C 破规矩亏的</option>
+          <option value="D">D 破规矩赚的</option>
+        </select>
+        <select id="filterDev">
+          <option value="">全部偏差</option>
+          <option value="any">有偏差</option>
+          <option value="clean">零偏差</option>
+        </select>
+      </div>
+      <div class="counts" id="listCounts"></div>
+    </div>
+    <div class="list" id="tradeList"></div>
+    <div class="empty hidden" id="emptyRecords">
+      <p>还没有记录。点右上角「＋ 开仓」，先把这一笔的触发条件写下来。</p>
+    </div>
+  </section>
+
+  <!-- ============ 月度复盘 ============ -->
+  <section class="view" id="view-review">
+    <div class="toolbar">
+      <div class="filters">
+        <label class="inline-label">复盘月份</label>
+        <select id="reviewMonth"></select>
+      </div>
+      <div class="hint">只统计已关仓的交易。建议固定在每月最后一天，给自己开半小时的会，只看下面三件事。</div>
+    </div>
+    <div id="reviewBody"></div>
+  </section>
+
+  <!-- ============ 状态洞察 ============ -->
+  <section class="view" id="view-insight">
+    <div class="toolbar">
+      <div class="hint">人在什么状态下容易失手 —— 它只藏在几十笔交易的共同点里。（只统计已关仓的交易）</div>
+    </div>
+    <div id="insightBody"></div>
+  </section>
+</main>
+
+<!-- ============ 开仓 / 关仓 弹窗 ============ -->
+<div class="modal-mask hidden" id="modalMask">
+  <div class="modal" id="modal">
+    <div class="modal-head">
+      <div>
+        <h2 id="modalTitle">开仓</h2>
+        <p class="modal-sub" id="modalSub"></p>
+      </div>
+      <button class="x" id="btnCloseModal">×</button>
+    </div>
+
+    <div class="steps" id="stepBar">
+      <button class="step active" data-step="1">1 开仓</button>
+      <button class="step locked" data-step="2">2 关仓</button>
+      <button class="step locked" data-step="3">3 状态复查</button>
+      <button class="step locked" data-step="4">4 归类</button>
+    </div>
+
+    <div class="modal-body">
+
+      <!-- ===== STEP 1 · 开仓 ===== -->
+      <div class="step-pane active" data-pane="1">
+        <div class="notice">
+          <strong>顺序不能反。</strong>这是下单<em>之前</em>写的条件。写完后点「锁定计划」，计划区会被冻结并盖上时间戳 —— 之后成交价、偏差、盈亏都只能挂在已冻结的计划上。<em>开仓不是一笔交易的结束，它只开了个头。</em>
+        </div>
+        <div class="notice unlock-notice hidden" id="unlockBanner"></div>
+        <div class="grid2">
+          <div class="field"><label>开仓日期</label><input type="date" id="f_date"></div>
+          <div class="field"><label>标的</label><input type="text" id="f_symbol" placeholder="如 金斯瑞 1548.HK" list="symbolList"></div>
+          <div class="field">
+            <label>方向</label>
+            <select id="f_direction"><option value="long">做多</option><option value="short">做空</option></select>
+          </div>
+          <div class="field">
+            <label>计划仓位（手/股数）</label>
+            <input type="number" id="f_planSize" step="100" placeholder="如 2000">
+            <span class="field-hint">↑ ↓ 每次 ±100 · 手工输入不受限</span>
+          </div>
+        </div>
+        <div class="field">
+          <label>这笔属于哪一种 <span class="req">*</span></label>
+          <div class="seg" id="modeSeg">
+            <button type="button" class="seg-opt" data-mode="planned">计划开仓</button>
+            <button type="button" class="seg-opt" data-mode="impulse">随意开仓</button>
+          </div>
+          <div class="seg-tip" id="modeTip"></div>
+        </div>
+        <div class="field">
+          <label id="triggerLabel">触发条件 · 凭什么进这一笔 <span class="req">*</span></label>
+          <textarea id="f_trigger" rows="3" placeholder="出现哪个信号？例如：放量突破20日箱体上沿且板块同步翻红；回踩MA20不破且缩量。"></textarea>
+        </div>
+        <div class="grid2">
+          <div class="field"><label>止损放在哪 <span class="req">*</span></label><input type="text" id="f_planStop" placeholder="如 跌破 18.4 / -5%"></div>
+          <div class="field"><label>目标 / 离场条件 <span class="req">*</span></label><input type="text" id="f_planExit" placeholder="如 到 22.0 减半，跌破MA10 全走"></div>
+        </div>
+        <div class="field">
+          <label>什么情况下走人（补充说明，可留空）</label>
+          <textarea id="f_planExitNote" rows="2" placeholder="逻辑失效条件：如 管线数据不及预期、南向连续三日净流出"></textarea>
+        </div>
+
+        <div class="sub-block">
+          <div class="sub-block-head">
+            <span class="sb-title">实际开仓</span>
+            <span class="sb-tip">锁定计划之后填成交事实</span>
+          </div>
+          <div class="grid2">
+            <div class="field"><label>实际开仓价</label><input type="number" id="f_entry" step="any"></div>
+            <div class="field"><label>实际开仓仓位（手/股数）</label><input type="number" id="f_openSize" step="any"></div>
+          </div>
+          <div class="dev-compare" id="devCompare"></div>
+        </div>
+
+        <div class="sub-block">
+          <div class="sub-block-head">
+            <span class="sb-title">当天情绪状态</span>
+            <span class="sb-tip">在开仓那一刻记下来，事后补记会失真</span>
+          </div>
+          <div class="notice">这一栏不能省。书上不会告诉你人在什么状态下容易失手，它只藏在几十笔交易的共同点里 —— <em>所以要在进场时就写，而不是收盘后靠回忆。</em></div>
+          <div class="grid2">
+            <div class="field">
+              <label>睡了几个小时</label>
+              <div class="row-inline">
+                <input type="range" id="f_sleep" min="0" max="12" step="0.5" value="7">
+                <span class="sleep-val" id="sleepVal">7 h</span>
+              </div>
+            </div>
+            <div class="field">
+              <label>心里是急的还是稳的</label>
+              <select id="f_mood">
+                <option value="calm">稳</option>
+                <option value="neutral">一般</option>
+                <option value="urgent">急</option>
+                <option value="fomo">怕踏空 / 手痒</option>
+                <option value="revenge">想扳回来</option>
+              </select>
+            </div>
+          </div>
+          <div class="field">
+            <label>状态勾选</label>
+            <div class="checks">
+              <label class="chk"><input type="checkbox" id="f_conflict"><span>刚跟人吵完架 / 情绪有波动</span></label>
+              <label class="chk"><input type="checkbox" id="f_prevLoss"><span>上一笔刚刚亏过</span></label>
+              <label class="chk"><input type="checkbox" id="f_prevWin"><span>上一笔刚大赚（飘了）</span></label>
+              <label class="chk"><input type="checkbox" id="f_busy"><span>当天事务很杂，看盘时间碎片化</span></label>
+            </div>
+          </div>
+          <div class="field"><label>状态备注</label><textarea id="f_stateNote" rows="2" placeholder="例：连开三个会，下午两点才看到信号"></textarea></div>
+        </div>
+
+        <div class="modal-foot">
+          <div class="lock-tip" id="lockTip">未锁定 · 现在改不算数，锁定后即为事前条件</div>
+          <div class="foot-right">
+            <button class="btn warn hidden" id="btnUnlockOpen" title="解锁开仓计划，回到可编辑状态">解锁回去改计划</button>
+            <button class="btn primary" id="btnLock">锁定计划 →</button>
+            <button class="btn primary hidden" id="btnGotoClose">下一步：关仓 →</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== STEP 2 · 关仓 ===== -->
+      <div class="step-pane" data-pane="2">
+        <div class="notice locked-notice" id="lockedBanner"></div>
+
+        <div class="field" id="closePickWrap" style="display:none">
+          <label>关仓标的 · 只能来自已开仓的持仓 <span class="req">*</span></label>
+          <select id="f_closeTarget"></select>
+          <div class="seg-tip" id="closePickTip"></div>
+        </div>
+
+        <div class="open-recap" id="openRecap"></div>
+
+        <div class="grid2">
+          <div class="field"><label>关仓日期</label><input type="date" id="f_closeDate"></div>
+          <div class="field"><label>实际出场价</label><input type="number" id="f_exit" step="any"></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label>实际出场仓位（手/股数）</label><input type="number" id="f_closeSize" step="any" placeholder="默认沿用开仓仓位"></div>
+          <div class="field"><label>实际止损位（若与计划不同）</label><input type="text" id="f_realStop" placeholder="留空表示与计划一致"></div>
+        </div>
+
+        <div class="field">
+          <label>偏差勾选 · 你实际做的和原本打算的，差在哪</label>
+          <div class="checks" id="devChecks">
+            <label class="chk chk-none"><input type="checkbox" data-dev="none"><span><b>无偏差</b> · 完全按计划执行，一处没动</span></label>
+            <label class="chk"><input type="checkbox" data-dev="impulse"><span>临时无计划开仓（当天开盘后临时起意）</span></label>
+            <label class="chk"><input type="checkbox" data-dev="stopMoved"><span>止损位挪过</span></label>
+            <label class="chk"><input type="checkbox" data-dev="sizeUp"><span>手数临时加过</span></label>
+            <label class="chk"><input type="checkbox" data-dev="missed"><span>该进的那一笔没进</span></label>
+            <label class="chk"><input type="checkbox" data-dev="lateExit"><span>该走时多看了两眼，止损晚走</span></label>
+            <label class="chk"><input type="checkbox" data-dev="earlyExit"><span>没到目标就提前跑了</span></label>
+            <label class="chk"><input type="checkbox" data-dev="noExit"><span>到今天还没走（浮亏扛着）</span></label>
+          </div>
+        </div>
+
+        <div class="field" id="lateDaysWrap" style="display:none">
+          <label>晚了多久出场</label>
+          <div class="row-inline">
+            <input type="number" id="f_lateDays" step="1" min="0" style="max-width:120px"><span class="unit">天</span>
+          </div>
+        </div>
+
+        <div class="field"><label>执行备注</label><textarea id="f_execNote" rows="2" placeholder="当时脑子里在想什么？"></textarea></div>
+
+        <div class="grid2">
+          <div class="field"><label>盈亏金额（¥）</label><input type="number" id="f_pnl" step="any" placeholder="填了出场价自动算，可手动覆盖"></div>
+          <div class="field"><label>每手乘数</label><input type="number" id="f_multiplier" step="any" value="1"></div>
+        </div>
+        <div class="pnl-preview" id="pnlPreview"></div>
+
+        <div class="modal-foot">
+          <div class="foot-left">
+            <button class="btn ghost" data-nav="1">← 回开仓</button>
+            <button class="btn warn" id="btnUnlock" title="解锁开仓计划并回到上一步">解锁回去改计划</button>
+          </div>
+          <div class="foot-right">
+            <button class="btn ghost" id="btnSaveOpen">存为持仓（暂不关仓）</button>
+            <button class="btn primary" data-nav="3">下一步：状态复查 →</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== STEP 3 · 状态复查 ===== -->
+      <div class="step-pane" data-pane="3">
+        <div class="notice">开仓时已经记下当天的状态，这里先复查一遍。<em>如果持仓期间心态变了，或者关仓那一刻的感受不一样，补写在下面。</em></div>
+        <div class="open-recap" id="stateRecap"></div>
+        <div class="field">
+          <label>关仓时 / 持仓期间的补充说明（可留空）</label>
+          <textarea id="f_stateExtra" rows="2" placeholder="例：第二天浮亏后开始频繁看盘，第三天实在扛不住才走"></textarea>
+        </div>
+
+        <div class="modal-foot">
+          <button class="btn ghost" data-nav="2">← 回关仓</button>
+          <button class="btn primary" data-nav="4">下一步：收盘归类 →</button>
+        </div>
+      </div>
+
+      <!-- ===== STEP 4 · 归类 ===== -->
+      <div class="step-pane" data-pane="4">
+        <div class="notice">收盘后花一分钟贴标签，四选一。第四类最危险 —— 破规矩居然赚了，它是下一次大亏的种子。</div>
+        <div class="cat-picker" id="catPicker">
+          <button class="cat-opt" data-cat="A">
+            <span class="cat-tag a">A</span>
+            <div><strong>守规矩赚的</strong><em>你的粮食 —— 重复它</em></div>
+          </button>
+          <button class="cat-opt" data-cat="B">
+            <span class="cat-tag b">B</span>
+            <div><strong>守规矩亏的</strong><em>你的成本 —— 正常交学费</em></div>
+          </button>
+          <button class="cat-opt" data-cat="C">
+            <span class="cat-tag c">C</span>
+            <div><strong>破规矩亏的</strong><em>要修的地方 —— 重点盯</em></div>
+          </button>
+          <button class="cat-opt" data-cat="D">
+            <span class="cat-tag d">D</span>
+            <div><strong>破规矩赚的</strong><em>最危险 —— 下次大亏的种子</em></div>
+          </button>
+        </div>
+        <div class="suggest" id="catSuggest"></div>
+        <div class="grid2">
+          <div class="field">
+            <label>当时是什么行情</label>
+            <select id="f_market">
+              <option value="">未选</option>
+              <option>趋势突破</option>
+              <option>回调企稳</option>
+              <option>超跌反弹</option>
+              <option>区间震荡</option>
+              <option>消息/事件驱动</option>
+              <option>业绩驱动</option>
+              <option>板块轮动</option>
+              <option>其他</option>
+            </select>
+          </div>
+          <div class="field"><label>持仓天数</label><input type="number" id="f_holdDays" step="1" min="0"></div>
+        </div>
+        <div class="field"><label>一句话总结</label><input type="text" id="f_lesson" placeholder="例：按计划吃到趋势段，别被日内噪音晃出去"></div>
+
+        <div class="modal-foot">
+          <button class="btn ghost" data-nav="3">← 回状态</button>
+          <div class="foot-right">
+            <button class="btn ghost" id="btnSaveOpen2">存为持仓（暂不关仓）</button>
+            <button class="btn primary" id="btnSave">保存</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<datalist id="symbolList"></datalist>
+<input type="file" id="fileInput" accept=".json" style="display:none">
+
+<!-- 导出兜底：内嵌预览窗口可能拦截自动下载，这里给一条手动通道 -->
+<div class="export-mask hidden" id="exportMask">
+  <div class="export-box">
+    <h3>导出内容已生成</h3>
+    <p class="export-hint" id="exportHint"></p>
+    <div class="export-actions">
+      <button class="btn primary" id="btnExportCopy">复制全部内容</button>
+      <button class="btn" id="btnExportRetry">再试一次下载</button>
+    </div>
+    <textarea id="exportText" readonly spellcheck="false"></textarea>
+    <div class="export-foot">
+      <span class="export-name" id="exportName"></span>
+      <button class="btn" id="btnExportClose">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast-wrap" id="toastWrap"></div>
+
+<script src="./app.js"></script>
+</body>
+</html>
