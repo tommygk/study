@@ -8,6 +8,17 @@
 </head>
 <body>
 
+<div class="gate" id="lockGate">
+  <div class="gate-card">
+    <div class="gate-badge">TJ</div>
+    <h1>交易日记</h1>
+    <p class="gate-sub">请输入访问密码</p>
+    <input type="password" id="gatePwd" placeholder="密码" autocomplete="off" inputmode="numeric" maxlength="8">
+    <button class="btn primary" id="gateBtn">进入</button>
+    <p class="gate-err" id="gateErr"></p>
+  </div>
+</div>
+
 <header class="topbar">
   <div class="brand">
     <span class="logo">TJ</span>
@@ -112,6 +123,8 @@
       <button class="step locked" data-step="4">4 归类</button>
     </div>
 
+    <div class="notice settled-note hidden" id="settledNote"></div>
+
     <div class="modal-body">
 
       <!-- ===== STEP 1 · 开仓 ===== -->
@@ -194,7 +207,8 @@
           <div class="field">
             <label>状态勾选</label>
             <div class="checks">
-              <label class="chk"><input type="checkbox" id="f_conflict"><span>刚跟人吵完架 / 情绪有波动</span></label>
+              <label class="chk"><input type="checkbox" id="f_fomo"><span>怕不上车来不及</span></label>
+              <label class="chk"><input type="checkbox" id="f_conflict"><span>情绪有波动</span></label>
               <label class="chk"><input type="checkbox" id="f_prevLoss"><span>上一笔刚刚亏过</span></label>
               <label class="chk"><input type="checkbox" id="f_prevWin"><span>上一笔刚大赚（飘了）</span></label>
               <label class="chk"><input type="checkbox" id="f_busy"><span>当天事务很杂，看盘时间碎片化</span></label>
@@ -321,6 +335,8 @@
               <option>回调企稳</option>
               <option>超跌反弹</option>
               <option>区间震荡</option>
+              <option>单边上涨</option>
+              <option>单边下跌</option>
               <option>消息/事件驱动</option>
               <option>业绩驱动</option>
               <option>板块轮动</option>

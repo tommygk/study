@@ -208,6 +208,7 @@
       var st = [];
       if (t.state.sleep != null) st.push('睡' + t.state.sleep + 'h');
       if (t.state.mood) st.push(MOOD_LABELS[t.state.mood]);
+      if (t.state.fomo) st.push('怕不上车');
       if (t.state.conflict) st.push('有情绪波动');
       if (t.state.prevLoss) st.push('上笔刚亏');
       if (t.state.prevWin) st.push('上笔刚赚');
@@ -329,6 +330,7 @@
     $('#f_sleep').value = st.sleep != null ? st.sleep : 7;
     $('#sleepVal').textContent = $('#f_sleep').value + ' h';
     $('#f_mood').value = st.mood || 'calm';
+    $('#f_fomo').checked = !!st.fomo;
     $('#f_conflict').checked = !!st.conflict;
     $('#f_prevLoss').checked = !!st.prevLoss;
     $('#f_prevWin').checked = !!st.prevWin;
@@ -460,6 +462,30 @@
     renderUnlockBanner(t);
     var bu = $('#btnUnlock');
     if (bu) bu.classList.toggle('hidden', isClosed(t));   // 已结算的不允许再改计划
+    applySettledReadonly(t);
+  }
+
+  /* 已结算 = 只读：关仓之后这笔就是历史。
+     事后改动不会让复盘更准，只会让数据说谎 —— 所以整表禁用，只留浏览与关闭。 */
+  function applySettledReadonly(t) {
+    var settled = !!(t && isClosed(t));
+    $$('#modal input, #modal select, #modal textarea').forEach(function (el) { el.disabled = settled; });
+    $$('#modeSeg .seg-opt, #catPicker .cat-opt').forEach(function (b) { b.disabled = settled; });
+    // 会写数据的按钮：已结算时一律收起（解锁按钮本就隐藏，这里再兜一次）
+    ['#btnLock', '#btnGotoClose', '#btnSave', '#btnSaveOpen', '#btnSaveOpen2', '#btnUnlock', '#btnUnlockOpen']
+      .forEach(function (s) { var b = $(s); if (b && settled) b.classList.add('hidden'); });
+    // 非结算记录：恢复保存类按钮（锁定/解锁类由 applyLock 自行管理显隐）
+    ['#btnSave', '#btnSaveOpen', '#btnSaveOpen2'].forEach(function (s) {
+      var b = $(s); if (b && !settled) b.classList.remove('hidden');
+    });
+    var note = $('#settledNote');
+    if (note) {
+      note.classList.toggle('hidden', !settled);
+      note.innerHTML = settled
+        ? '<strong>这笔已关仓结算，仅供查看，不能修改。</strong>结算之后它就是历史 —— 事后改动不会让复盘更准，只会让数据说谎。'
+        : '';
+    }
+    return settled;
   }
 
   function gotoStep(n) {
@@ -473,7 +499,8 @@
     var t = editingId ? byId(editingId) : null;
     var s = (t && t.state) || {};
     var flags = [];
-    if (s.conflict) flags.push('刚吵完架 / 情绪有波动');
+    if (s.fomo) flags.push('怕不上车来不及');
+    if (s.conflict) flags.push('情绪有波动');
     if (s.prevLoss) flags.push('上一笔刚亏');
     if (s.prevWin) flags.push('上一笔刚赚');
     if (s.busy) flags.push('看盘碎片化');
@@ -621,6 +648,7 @@
       t = editingId ? byId(editingId) : null;
       if (!t) { t = { id: uid(), devs: [] }; store.push(t); editingId = t.id; }
     }
+    if (isClosed(t)) return;   // 已结算的记录只读：任何写路径都不得再改动它
     t.date = $('#f_date').value || today();
     t.symbol = $('#f_symbol').value.trim();
     t.direction = $('#f_direction').value;
@@ -654,6 +682,7 @@
     t.state = {
       sleep: parseFloat($('#f_sleep').value),
       mood: $('#f_mood').value,
+      fomo: $('#f_fomo').checked,
       conflict: $('#f_conflict').checked,
       prevLoss: $('#f_prevLoss').checked,
       prevWin: $('#f_prevWin').checked,
@@ -678,6 +707,7 @@
   function saveTrade(forceOpen) {
     var t = editingId ? byId(editingId) : null;
     if (!t || !t.plan || !t.plan.lockedAt) { alert('计划还没锁定。没有事前写下来的条件，这笔记录就没有意义。'); gotoStep(1); return; }
+    if (isClosed(t)) { alert('这笔已关仓结算，不能再修改。\n\n结算之后它就是历史 —— 要更正请重新录入一笔。'); return; }
     collect(t);
     if (t.status === 'open') {
       t.exec.pnl = null;
@@ -692,7 +722,7 @@
 
   function closeModal() {
     var t = editingId ? byId(editingId) : null;
-    if (t && t.plan && t.plan.lockedAt) {           // 锁定过的记录，关窗即落盘
+    if (t && t.plan && t.plan.lockedAt && !isClosed(t)) {   // 锁定过的记录，关窗即落盘（已结算的不写）
       collect(t);
       if (t.status === 'open') t.exec.pnl = null;
       save();
@@ -953,14 +983,15 @@
         '把它写成一条硬规则：只要出现这种状态，当天不下新单。';
     });
 
-    h += block('前置事件 vs 失手', '上一笔刚亏过、刚吵完架 —— 这些才是真正的风险因子。', [
+    h += block('前置事件 vs 失手', '怕不上车、上一笔刚亏过 —— 这些才是真正的风险因子。', [
+      groupStat('怕不上车来不及', function (t) { return t.state && t.state.fomo; }),
       groupStat('上一笔刚亏过', function (t) { return t.state && t.state.prevLoss; }),
       groupStat('上一笔刚大赚', function (t) { return t.state && t.state.prevWin; }),
       groupStat('有情绪波动', function (t) { return t.state && t.state.conflict; }),
       groupStat('看盘碎片化', function (t) { return t.state && t.state.busy; }),
       groupStat('以上都没有', function (t) {
         var s = t.state || {};
-        return !s.prevLoss && !s.prevWin && !s.conflict && !s.busy;
+        return !s.fomo && !s.prevLoss && !s.prevWin && !s.conflict && !s.busy;
       })
     ], function (w, b) {
       return '<strong>「' + w.name + '」时破规矩率 ' + w.rate + '%</strong>，是这组里最高的。' +
@@ -1021,7 +1052,7 @@
     var head = ['状态', '开仓日期', '关仓日期', '标的', '方向', '开仓性质', '触发条件', '计划止损', '计划仓位', '实际开仓价', '实际开仓仓位', '出场价', '实际出场仓位', '实际止损', '盈亏', '偏差动作', '晚走天数', '持仓天数', '睡眠', '情绪', '状态标记', '状态补充', '行情', '归类', '总结'];
     var rows = store.slice().sort(function (a, b) { return (a.date || '').localeCompare(b.date || ''); }).map(function (t) {
       var s = t.state || {}, r = t.review || {}, e = t.exec || {}, p = t.plan || {};
-      var flags = [s.conflict ? '有情绪波动' : '', s.prevLoss ? '上笔刚亏' : '', s.prevWin ? '上笔刚赚' : '', s.busy ? '看盘碎片化' : ''].filter(Boolean).join(' ');
+      var flags = [s.fomo ? '怕不上车' : '', s.conflict ? '有情绪波动' : '', s.prevLoss ? '上笔刚亏' : '', s.prevWin ? '上笔刚赚' : '', s.busy ? '看盘碎片化' : ''].filter(Boolean).join(' ');
       return [
         isClosed(t) ? '已关仓' : '持仓中', t.date, e.closeDate, t.symbol, t.direction === 'short' ? '做空' : '做多',
         p.mode === 'impulse' ? '随意开仓' : p.mode === 'planned' ? '计划开仓' : '',
@@ -1132,7 +1163,7 @@
       '日线底背离 + 周线趋势未破',
       '业绩预告超预期，跳空缺口未回补'
     ];
-    var markets = ['趋势突破', '回调企稳', '消息/事件驱动', '业绩驱动', '超跌反弹', '板块轮动'];
+    var markets = ['趋势突破', '回调企稳', '消息/事件驱动', '业绩驱动', '超跌反弹', '板块轮动', '单边上涨', '单边下跌'];
     var lessons = ['按计划吃到趋势段，别被日内噪音晃出去', '信号成立但仓位偏重，下次等回踩再加', '逻辑失效就该走，不要等解套', '计划内的止损就是成本，接受它'];
     var out = [];
     var months = [prevMonth(prevMonth(ym(today()))), prevMonth(ym(today())), ym(today())];
@@ -1189,6 +1220,7 @@
           state: {
             sleep: [4.5, 5.5, 6, 6.5, 7, 7.5, 8][Math.floor(Math.random() * 7)],
             mood: ['calm', 'calm', 'neutral', 'urgent', 'fomo', 'revenge'][Math.floor(Math.random() * 6)],
+            fomo: Math.random() < 0.25,
             conflict: Math.random() < 0.15,
             prevLoss: Math.random() < 0.3,
             prevWin: Math.random() < 0.15,
@@ -1353,5 +1385,45 @@
     });
   }
 
-  load(); bind(); renderAll();
+  /* ---------------- 访问密码（纯前端软门禁） ----------------
+     密码 = 当天日期 yyyymmdd（如 2026-09-29 → 20260929），每天自动更换。
+     说明：纯前端校验，源码里能看出规则，只能挡住随手点开页面的人，
+     挡不住查看源码的人。真正的隐私边界是「数据只存在本机浏览器」，而不是这道门。 */
+  function dayKey() {
+    var d = new Date();
+    return '' + d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0');
+  }
+  function initGate() {
+    var gate = $('#lockGate');
+    if (!gate) return;
+    var SKEY = 'trade-journal.unlocked';
+    var unlocked = false;
+    /* 记录「解锁的是哪一天」：跨天后刷新会自动重新上锁 */
+    try { unlocked = sessionStorage.getItem(SKEY) === dayKey(); } catch (e) {}
+    if (unlocked) { gate.classList.add('hidden'); return; }
+
+    var pwd = $('#gatePwd'), btn = $('#gateBtn'), err = $('#gateErr');
+    function attempt() {
+      var val = ((pwd && pwd.value) || '').replace(/\D/g, '');
+      if (val && val === dayKey()) {
+        try { sessionStorage.setItem(SKEY, dayKey()); } catch (e) {}
+        if (err) err.textContent = '';
+        gate.classList.add('hidden');
+      } else {
+        if (err) err.textContent = '密码不对，再试一次';
+        gate.classList.add('shake');
+        setTimeout(function () { gate.classList.remove('shake'); }, 340);
+        if (pwd) { pwd.value = ''; try { pwd.focus(); } catch (e2) {} }
+      }
+    }
+    if (btn) btn.addEventListener('click', attempt);
+    if (pwd) {
+      pwd.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.keyCode === 13) attempt(); });
+      /* 只允许输入数字，最多 8 位 */
+      pwd.addEventListener('input', function () { pwd.value = pwd.value.replace(/\D/g, '').slice(0, 8); });
+      setTimeout(function () { try { pwd.focus(); } catch (e3) {} }, 60);
+    }
+  }
+
+  load(); bind(); renderAll(); initGate();
 })();
