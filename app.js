@@ -99,6 +99,104 @@
     if (!storageOK) warnStorageOnce();
   }
   function save() { lsSet(KEY, JSON.stringify(store)); }
+
+  /* ---------------- 备份状态 ----------------
+     数据只存在本机浏览器，唯一的防线是备份。这里记住「上次导出备份的时刻」，
+     再用每笔记录的 updatedAt 算出还有几笔没进过备份文件，避免忘了导、忘了存。 */
+  var MKEY = 'trade-journal.meta';
+  function getMeta() { try { return JSON.parse(lsGet(MKEY) || '{}') || {}; } catch (e) { return {}; } }
+  function setMeta(m) { lsSet(MKEY, JSON.stringify(m)); }
+
+  function stampOf(t) { return (t && (t.updatedAt || t.date)) || ''; }
+  function pendingCount() {
+    var since = getMeta().lastBackupAt || '';
+    if (!since) return store.length;
+    var n = 0;
+    for (var i = 0; i < store.length; i++) if (stampOf(store[i]) > since) n++;
+    return n;
+  }
+  function daysSinceBackup() {
+    var t = getMeta().lastBackupAt;
+    if (!t) return null;
+    var iso = t.length > 10 ? t : t + 'T00:00';
+    var d = new Date(iso.replace(' ', 'T'));
+    if (isNaN(d.getTime())) return null;
+    return Math.floor((Date.now() - d.getTime()) / 86400000);
+  }
+  function markBackup() {
+    var m = getMeta(); m.lastBackupAt = nowStr(); setMeta(m);
+    renderBackupChip();
+  }
+  /* 导入的数据本身就是一份备份文件的快照 —— 视作「已备份到那一刻」 */
+  function noteImported(arr) {
+    var m = getMeta(), mx = m.lastBackupAt || '';
+    (arr || []).forEach(function (t) { var s = stampOf(t); if (s > mx) mx = s; });
+    m.lastBackupAt = mx; setMeta(m);
+  }
+  /* ---------------- 外部数据文件 data.json ----------------
+     定位：数据仍然只写在本机 localStorage —— 纯静态站没有后端，浏览器无法把数据写回文件。
+     data.json 是**基线数据**，只解决一件事：换设备/换浏览器首次打开时自动把数据灌进来，
+     省掉手动导入。它**不会**覆盖本机已有数据（除非用户在菜单里主动点「从 data.json 载入」）。
+     写回流程：本机导出 data.json → 覆盖仓库里的同名文件 → 提交。
+     ⚠️ 仓库是公开的，这个文件一旦提交，内容全网可读。 */
+  var DATA_FILE = './data.json';
+
+  function seedFromFile(force) {
+    if (!window.fetch) { if (force) toast('当前环境不支持读取 data.json'); return; }
+    fetch(DATA_FILE, { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function (d) {
+        if (!Array.isArray(d) || !d.length) { if (force) toast('data.json 里没有记录'); return; }
+        if (!force && store.length) return;   /* 本机已有数据：绝不静默覆盖 */
+        store = d; noteImported(d); save(); renderAll();
+        toast('已从 data.json 载入 ' + d.length + ' 笔记录');
+      })
+      .catch(function (e) {
+        /* 仓库里没有该文件、或以本地文件方式直接打开（file:// 下 fetch 被拦）：静默降级 */
+        if (force) toast('读取 data.json 失败：' + ((e && e.message) || '未知错误'));
+      });
+  }
+
+  /* 合并导入：按 id 去重。同 id 以备份文件里的为准（它更可能是完整版本），
+     两边各自独有的记录都保留，绝不静默丢弃任何一笔。 */
+  function mergeTrades(existing, incoming) {
+    var map = {}, order = [], i;
+    for (i = 0; i < existing.length; i++) { map[existing[i].id] = existing[i]; order.push(existing[i].id); }
+    var added = 0, updated = 0, seen = {};
+    for (i = 0; i < incoming.length; i++) {
+      var t = incoming[i];
+      if (!t || !t.id) continue;
+      if (seen[t.id]) { map[t.id] = t; continue; }   // 同一份文件内的重复 id：取后一份，不重复计数
+      seen[t.id] = 1;
+      if (map[t.id]) { map[t.id] = t; updated++; }
+      else { map[t.id] = t; order.push(t.id); added++; }
+    }
+    return { list: order.map(function (id) { return map[id]; }), added: added, updated: updated };
+  }
+  /* 到期提醒：数据只在本机，宁可多提醒一次，也不能让它悄悄没备份地丢掉 */
+  function nudgeBackup() {
+    if (!store.length) return;
+    var n = pendingCount(), days = daysSinceBackup();
+    if (n === 0) return;
+    if (n < 5 && days !== null && days < 7) return;   // 改动很少且最近备份过，不打扰
+    toast('有 ' + n + ' 笔记录还没备份', '立即备份', doBackup, 9000);
+  }
+  function renderBackupChip() {
+    var chip = $('#bakChip'); if (!chip) return;
+    if (!store.length) { chip.classList.add('hidden'); return; }
+    chip.classList.remove('hidden');
+    var n = pendingCount(), days = daysSinceBackup();
+    chip.classList.toggle('warn', n > 0);
+    var txt;
+    if (n > 0) txt = n + ' 笔未备份';
+    else if (days === null) txt = '已备份';
+    else if (days === 0) txt = '今天已备份';
+    else txt = '已备份 · ' + days + ' 天前';
+    $('#bakChipText').textContent = txt;
+    chip.title = n > 0
+      ? '自上次备份后有 ' + n + ' 笔新增或修改。数据只在本机浏览器，点击导出备份文件'
+      : '全部记录已在备份文件里。数据只在本机浏览器，建议换设备/清缓存前再导一次';
+  }
   function byId(id) { for (var i = 0; i < store.length; i++) if (store[i].id === id) return store[i]; return null; }
 
   /* ---------------- 记录状态 ---------------- */
@@ -649,6 +747,7 @@
       if (!t) { t = { id: uid(), devs: [] }; store.push(t); editingId = t.id; }
     }
     if (isClosed(t)) return;   // 已结算的记录只读：任何写路径都不得再改动它
+    t.updatedAt = nowStr();    // 用于判断「这笔有没有进过备份文件」
     t.date = $('#f_date').value || today();
     t.symbol = $('#f_symbol').value.trim();
     t.direction = $('#f_direction').value;
@@ -1046,6 +1145,7 @@
   function renderAll() {
     refreshMonthSelects();
     renderKpi(); renderList(); renderReview(); renderInsight();
+    renderBackupChip();
   }
 
   function toCSV() {
@@ -1066,6 +1166,7 @@
 
   /* ---------------- 导出 ---------------- */
   var lastExport = null;
+  var importMode = 'replace';
 
   // 真正落盘的下载。注意：不能在 click() 之后立刻 revokeObjectURL，
   // Chrome / Edge 会在文件还没写完时把下载掐掉，表现就是「点了没反应」。
@@ -1131,15 +1232,23 @@
     } else { fallback(); }
   }
 
-  function exportFile(name, content, type) {
+  function exportFile(name, content, type, isBackup) {
     $('#dataMenu').classList.add('hidden');
-    lastExport = { name: name, content: content, type: type };
+    lastExport = { name: name, content: content, type: type, isBackup: !!isBackup };
     var ok = download(name, content, type);
     if (inFrame() || !ok) {
       showExportPanel();
     } else {
       toast('已开始下载 ' + name, '没反应？', showExportPanel);
+      /* 只有在真的把文件交到用户手上时才算备份过；
+         预览窗口（iframe）里下载会被拦，必须等用户复制成功才算。 */
+      if (isBackup && !inFrame()) markBackup();
     }
+  }
+
+  function doBackup() {
+    var name = '交易日记备份_' + today() + '.json';
+    exportFile(name, JSON.stringify(store, null, 2), 'application/json', true);
   }
 
   function showExportPanel() {
@@ -1323,6 +1432,8 @@
     $('#filterDev').addEventListener('change', renderList);
     $('#reviewMonth').addEventListener('change', renderReview);
 
+    $('#bakChip').addEventListener('click', function () { doBackup(); });
+
     $('#btnMenu').addEventListener('click', function (e) {
       e.stopPropagation();
       $('#dataMenu').classList.toggle('hidden');
@@ -1335,11 +1446,18 @@
       if (!act) return;
       $('#dataMenu').classList.add('hidden');
       if (act === 'export-json') {
-        exportFile('交易日记备份_' + today() + '.json', JSON.stringify(store, null, 2), 'application/json');
+        doBackup();
+      } else if (act === 'export-datafile') {
+        exportFile('data.json', JSON.stringify(store, null, 2), 'application/json', true);
+      } else if (act === 'reload-file') {
+        if (store.length && !confirm('从 data.json 载入会用文件内容覆盖本机当前的 ' + store.length + ' 笔记录，继续？')) return;
+        seedFromFile(true);
       } else if (act === 'export-csv') {
         exportFile('交易日记_' + today() + '.csv', toCSV(), 'text/csv;charset=utf-8');
       } else if (act === 'import-json') {
-        $('#fileInput').click();
+        importMode = 'replace'; $('#fileInput').click();
+      } else if (act === 'merge-json') {
+        importMode = 'merge'; $('#fileInput').click();
       } else if (act === 'demo') {
         if (store.length && !confirm('载入演示数据会覆盖当前 ' + store.length + ' 笔记录，继续？')) return;
         store = demoData(); save(); renderAll();
@@ -1354,24 +1472,38 @@
     $('#exportMask').addEventListener('click', function (e) { if (e.target === this) hideExportPanel(); });
     $('#btnExportCopy').addEventListener('click', function () {
       if (lastExport) copyText(lastExport.content, $('#exportText'));
+      /* 内容已离开浏览器（进了剪贴板），等价于完成一次备份 */
+      if (lastExport && lastExport.isBackup) markBackup();
     });
     $('#btnExportRetry').addEventListener('click', function () {
       if (!lastExport) return;
       var ok = download(lastExport.name, lastExport.content, lastExport.type);
       if (ok && !inFrame()) toast('已再次请求下载 ' + lastExport.name);
       else toast('下载被当前窗口拒绝，请改用「复制全部内容」');
+      if (ok && !inFrame() && lastExport.isBackup) markBackup();
     });
 
     $('#fileInput').addEventListener('change', function (e) {
       var f = e.target.files[0];
       if (!f) return;
+      var mode = importMode || 'replace';
       var rd = new FileReader();
       rd.onload = function () {
         try {
           var d = JSON.parse(rd.result);
           if (!Array.isArray(d)) throw new Error('格式不对');
-          if (!confirm('导入 ' + d.length + ' 笔记录，覆盖当前数据？')) return;
-          store = d; save(); renderAll();
+          if (mode === 'merge') {
+            /* 按 id 去重：两边独有的都保留，同 id 以备份文件为准 */
+            var r = mergeTrades(store, d);
+            store = r.list;
+            noteImported(d);
+            save(); renderAll();
+            toast('已合并 ' + d.length + ' 笔：新增 ' + r.added + ' 笔，更新 ' + r.updated + ' 笔');
+          } else {
+            if (!confirm('导入 ' + d.length + ' 笔记录，覆盖当前 ' + store.length + ' 笔？')) return;
+            store = d; noteImported(d); save(); renderAll();
+            toast('已导入 ' + store.length + ' 笔记录');
+          }
         } catch (err) { alert('导入失败：' + err.message); }
       };
       rd.readAsText(f);
@@ -1386,12 +1518,13 @@
   }
 
   /* ---------------- 访问密码（纯前端软门禁） ----------------
-     密码 = 当天日期 yyyymmdd（如 2026-09-29 → 20260929），每天自动更换。
+     密码 = 当天日期 yyyymmdd + 'Gk'（如 2026-09-29 → 20260929Gk），每天自动更换。
+     字母部分不分大小写（gk / Gk / GK 都可以），避免因手机自动大写而登不进去。
      说明：纯前端校验，源码里能看出规则，只能挡住随手点开页面的人，
      挡不住查看源码的人。真正的隐私边界是「数据只存在本机浏览器」，而不是这道门。 */
   function dayKey() {
     var d = new Date();
-    return '' + d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0');
+    return '' + d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0') + 'Gk';
   }
   function initGate() {
     var gate = $('#lockGate');
@@ -1404,8 +1537,9 @@
 
     var pwd = $('#gatePwd'), btn = $('#gateBtn'), err = $('#gateErr');
     function attempt() {
-      var val = ((pwd && pwd.value) || '').replace(/\D/g, '');
-      if (val && val === dayKey()) {
+      /* 只保留数字和字母：粘贴 2026-09-29Gk 也能用 */
+      var val = ((pwd && pwd.value) || '').replace(/[^0-9A-Za-z]/g, '');
+      if (val && val.toLowerCase() === dayKey().toLowerCase()) {
         try { sessionStorage.setItem(SKEY, dayKey()); } catch (e) {}
         if (err) err.textContent = '';
         gate.classList.add('hidden');
@@ -1419,11 +1553,11 @@
     if (btn) btn.addEventListener('click', attempt);
     if (pwd) {
       pwd.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.keyCode === 13) attempt(); });
-      /* 只允许输入数字，最多 8 位 */
-      pwd.addEventListener('input', function () { pwd.value = pwd.value.replace(/\D/g, '').slice(0, 8); });
+      /* 只允许数字和字母（8 位日期 + 2 位字母），最多 10 位 */
+      pwd.addEventListener('input', function () { pwd.value = pwd.value.replace(/[^0-9A-Za-z]/g, '').slice(0, 10); });
       setTimeout(function () { try { pwd.focus(); } catch (e3) {} }, 60);
     }
   }
 
-  load(); bind(); renderAll(); initGate();
+  load(); bind(); renderAll(); nudgeBackup(); initGate(); seedFromFile();
 })();

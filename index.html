@@ -13,7 +13,7 @@
     <div class="gate-badge">TJ</div>
     <h1>交易日记</h1>
     <p class="gate-sub">请输入访问密码</p>
-    <input type="password" id="gatePwd" placeholder="密码" autocomplete="off" inputmode="numeric" maxlength="8">
+    <input type="password" id="gatePwd" placeholder="密码" autocomplete="off" spellcheck="false" autocapitalize="off" maxlength="10">
     <button class="btn primary" id="gateBtn">进入</button>
     <p class="gate-err" id="gateErr"></p>
   </div>
@@ -38,11 +38,17 @@
     </div>
     <button class="btn primary" id="btnNew">＋ 开仓</button>
     <button class="btn ghost" id="btnClosePos">关仓 <span class="badge" id="openBadge">0</span></button>
+    <button class="bak-chip hidden" id="bakChip" title="数据只存在本机浏览器，建议定期备份。点击立即导出全量备份">
+      <span class="bak-dot"></span><span id="bakChipText">备份</span>
+    </button>
     <div class="menu-wrap">
       <button class="btn ghost" id="btnMenu">数据 ▾</button>
       <div class="menu hidden" id="dataMenu">
         <button data-act="export-json">导出备份 (JSON)</button>
-        <button data-act="import-json">导入备份 (JSON)</button>
+        <button data-act="export-datafile">导出 data.json (放回仓库)</button>
+        <button data-act="reload-file">从 data.json 载入 (覆盖本机)</button>
+        <button data-act="import-json">导入备份 (覆盖)</button>
+        <button data-act="merge-json">导入备份 (合并去重)</button>
         <button data-act="export-csv">导出表格 (CSV)</button>
         <button data-act="demo">载入演示数据</button>
         <button data-act="clear" class="danger">清空全部记录</button>

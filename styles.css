@@ -224,6 +224,15 @@ table.mini tr:last-child td{border-bottom:0}
 .chk:has(input:checked){border-color:#f0dcc4;background:var(--warn-soft);color:var(--warn)}
 .chk-none{grid-column:1 / -1}
 .chk-none:has(input:checked){border-color:#bfe3c6;background:#f0faf2;color:var(--up)}
+.bak-chip{
+  display:inline-flex;align-items:center;gap:6px;padding:5px 11px;margin-right:2px;
+  border:1px solid var(--line);border-radius:999px;background:var(--panel);
+  color:var(--muted);font:inherit;font-size:12px;cursor:pointer;
+}
+.bak-chip:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.bak-dot{width:7px;height:7px;border-radius:50%;background:var(--down);flex:none}
+.bak-chip.warn{border-color:#eabf8a;background:var(--warn-soft);color:var(--warn)}
+.bak-chip.warn .bak-dot{background:#e08c1a}
 .badge{
   display:inline-block;min-width:17px;padding:0 5px;margin-left:3px;border-radius:10px;
   background:var(--accent-soft);color:var(--accent);font-size:11px;font-weight:700;line-height:17px;
