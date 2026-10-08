@@ -180,7 +180,11 @@
           </div>
           <div class="grid2">
             <div class="field"><label>实际开仓价</label><input type="number" id="f_entry" step="any"></div>
-            <div class="field"><label>实际开仓仓位（手/股数）</label><input type="number" id="f_openSize" step="any"></div>
+            <div class="field">
+              <label>实际开仓仓位（手/股数）</label>
+              <input type="number" id="f_openSize" step="100">
+              <span class="field-hint">↑ ↓ 每次 ±100 · 手工输入不受限</span>
+            </div>
           </div>
           <div class="dev-compare" id="devCompare"></div>
         </div>
@@ -250,7 +254,11 @@
           <div class="field"><label>实际出场价</label><input type="number" id="f_exit" step="any"></div>
         </div>
         <div class="grid2">
-          <div class="field"><label>实际出场仓位（手/股数）</label><input type="number" id="f_closeSize" step="any" placeholder="默认沿用开仓仓位"></div>
+          <div class="field">
+            <label>实际出场仓位（手/股数）</label>
+            <input type="number" id="f_closeSize" step="100" placeholder="默认沿用开仓仓位">
+            <span class="field-hint">↑ ↓ 每次 ±100 · 手工输入不受限</span>
+          </div>
           <div class="field"><label>实际止损位（若与计划不同）</label><input type="text" id="f_realStop" placeholder="留空表示与计划一致"></div>
         </div>
 
@@ -287,6 +295,7 @@
           <div class="foot-left">
             <button class="btn ghost" data-nav="1">← 回开仓</button>
             <button class="btn warn" id="btnUnlock" title="解锁开仓计划并回到上一步">解锁回去改计划</button>
+            <button class="btn danger hidden" id="btnDelete" title="删除这笔记录，不可撤销">删除这笔</button>
           </div>
           <div class="foot-right">
             <button class="btn ghost" id="btnSaveOpen">存为持仓（暂不关仓）</button>

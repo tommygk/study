@@ -109,6 +109,8 @@ textarea{resize:vertical;line-height:1.55}
 .spacer{flex:1}
 .pnl{font-weight:650;font-variant-numeric:tabular-nums;font-size:15px}
 .pnl.up{color:var(--up)} .pnl.down{color:var(--down)} .pnl.flat{color:var(--muted)}
+/* 已关仓、但缺开仓价或仓位导致盈亏没算出来 —— 不是「还没关仓」，用警示色区分 */
+.pnl.need-fix{color:var(--warn);font-weight:600;font-size:13px;cursor:help}
 .card-mid{margin-top:8px;display:grid;grid-template-columns:1fr auto;gap:14px;align-items:start}
 .trigger{font-size:13px;color:var(--ink-2);line-height:1.5}
 .trigger .label{color:var(--muted);margin-right:6px}

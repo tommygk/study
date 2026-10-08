@@ -8,6 +8,7 @@
   var store = [];
   var editingId = null;
   var modalMode = 'open';   // 'open' 开仓表单 | 'close' 关仓表单
+  var pnlManual = false;    // 盈亏金额是否被手动改过：没改过就必须跟着价格实时重算
 
   var DEV_LABELS = {
     none:       '无偏差',
@@ -210,7 +211,14 @@
       .sort(function (a, b) { return (b.date || '').localeCompare(a.date || ''); });
   }
   function monthOf(t) { return isClosed(t) && t.exec.closeDate ? ym(t.exec.closeDate) : ym(t.date); }
-  function pnlOf(t) { return isClosed(t) && t.exec && typeof t.exec.pnl === 'number' ? t.exec.pnl : null; }
+  /* 「算得出钱的盈亏」只有一种形态：一个有限的数字。
+     导入的旧文件里如果 pnl 存成了字符串（"-2781"），typeof 不是 number，
+     在卡片上就会被判成「没算出来」—— 这里用同一把尺子量，免得两处判定打架。 */
+  function isPnlNum(v) { return typeof v === 'number' && isFinite(v); }
+  function pnlOf(t) { return isClosed(t) && t.exec && isPnlNum(t.exec.pnl) ? t.exec.pnl : null; }
+  /* 「已关仓，但盈亏没算出来」= 有出场价（所以算关仓），却缺开仓价或实际仓位（所以算不出钱）。
+     它和「已关仓未归类」一样属于「没写完」，不是改写历史 —— 见 applySettledReadonly 里的窄口子。 */
+  function needPnlOf(t) { return !!(t && isClosed(t) && !isPnlNum(t.exec && t.exec.pnl)); }
   // 「无偏差」是显式确认，不算偏差项
   function realDevs(t) { return (t && t.devs ? t.devs : []).filter(function (d) { return d !== 'none'; }); }
   function noDevMarked(t) { return !!(t && t.devs && t.devs.indexOf('none') >= 0); }
@@ -328,7 +336,9 @@
       '<span class="date">' + dateTxt + '</span>' +
       '<span class="spacer"></span>' +
       (closed
-        ? '<span class="pnl ' + pcls + '">' + (p == null ? '未结算' : money(p)) + '</span>'
+        ? (p == null
+          ? '<span class="pnl flat need-fix" title="已关仓，但缺少开仓价或实际仓位，盈亏没算出来 —— 点开这笔补上就会自动结算">待补盈亏</span>'
+          : '<span class="pnl ' + pcls + '">' + money(p) + '</span>')
         : '<span class="badge-hold">持仓中</span>') +
       '</div>';
 
@@ -393,6 +403,10 @@
     }
     editingId = id || null;
 
+    /* 「删除这笔」只在编辑已有记录时出现；已关仓是只读的，它是唯一的更正出口 */
+    var del = $('#btnDelete');
+    if (del) del.classList.toggle('hidden', !editingId);
+
     $('#modalTitle').textContent = modalMode === 'close' ? '关仓结算' : (t ? '编辑开仓 · ' + (t.symbol || '') : '开仓');
     $('#modalSub').textContent = modalMode === 'close'
       ? '先选一笔已开仓的持仓，再填实际出场 —— 结算之后才算得失'
@@ -419,6 +433,13 @@
     $('#f_realStop').value = t ? realStopOf(t) : '';
     $('#f_execNote').value = t && t.exec ? (t.exec.note || '') : '';
     $('#f_pnl').value = t && t.exec && t.exec.pnl != null ? t.exec.pnl : '';
+    pnlManual = false;
+    /* 存下来的盈亏若与本公式算出的对不上，说明当年是手动改过的 —— 保留它，别覆盖 */
+    if (t && t.exec && t.exec.pnl != null && t.exec.entry != null && t.exec.exit != null && qtyOf(t) != null) {
+      var expPnl = (t.direction === 'short' ? (t.exec.entry - t.exec.exit) : (t.exec.exit - t.exec.entry)) *
+        qtyOf(t) * (t.exec.multiplier != null ? t.exec.multiplier : 1);
+      if (Math.round(expPnl * 100) / 100 !== Math.round(t.exec.pnl * 100) / 100) pnlManual = true;
+    }
     $('#f_multiplier').value = t && t.exec && t.exec.multiplier != null ? t.exec.multiplier : 1;
     $('#f_lateDays').value = t && t.exec && t.exec.lateDays != null ? t.exec.lateDays : '';
 
@@ -451,7 +472,11 @@
     var locked = !!(t && t.plan && t.plan.lockedAt);
     applyLock(locked, t);
     renderOpenRecap(t);
-    gotoStep(locked && modalMode === 'close' ? 2 : 1);
+    /* 已关仓却没写完 → 直接落到该补的那一步：盈亏在第 2 步（关仓面板），归类在第 4 步。
+       两样都缺时先去第 2 步 —— 归类建议要拿盈亏数当依据，先有钱数再贴标签才说得通。 */
+    var needCat = !!(t && isClosed(t) && !(t.review && t.review.cat));
+    var needPnl = needPnlOf(t);
+    gotoStep(needPnl ? 2 : needCat ? 4 : (locked && modalMode === 'close' ? 2 : 1));
     syncOpenCompare();
     syncCloseCompare();
     syncPnlPreview();
@@ -560,6 +585,12 @@
     renderUnlockBanner(t);
     var bu = $('#btnUnlock');
     if (bu) bu.classList.toggle('hidden', isClosed(t));   // 已结算的不允许再改计划
+    /* 步骤条：第 2/3/4 步能不能点，取决这笔的计划锁没锁。
+       原来那三个 `locked` 类是 HTML 里写死的、没有任何代码去更新，所以 tab 一直是死的 ——
+       以前只能靠各步里的「下一步」按钮绕过去，一旦从列表重新打开（落在第 1 步），就彻底出不去。 */
+    $$('#stepBar .step').forEach(function (b) {
+      b.classList.toggle('locked', Number(b.dataset.step) > 1 && !locked);
+    });
     applySettledReadonly(t);
   }
 
@@ -567,6 +598,12 @@
      事后改动不会让复盘更准，只会让数据说谎 —— 所以整表禁用，只留浏览与关闭。 */
   function applySettledReadonly(t) {
     var settled = !!(t && isClosed(t));
+    /* 已关仓 = 只读，但留两个窄口子。它们都是「没写完」而不是「改写历史」：
+       ① 归类空着  —— 月度复盘的必填项，缺了这笔在复盘里等于不存在；
+       ② 盈亏没算出来 —— 有出场价所以算关仓，却缺开仓价或仓位，卡片上那个「待补盈亏」就是它。
+       各自只放开所需的那一小块，其余照旧冻结。 */
+    var needCat = settled && !(t.review && t.review.cat);
+    var needPnl = needPnlOf(t);
     $$('#modal input, #modal select, #modal textarea').forEach(function (el) { el.disabled = settled; });
     $$('#modeSeg .seg-opt, #catPicker .cat-opt').forEach(function (b) { b.disabled = settled; });
     // 会写数据的按钮：已结算时一律收起（解锁按钮本就隐藏，这里再兜一次）
@@ -576,12 +613,30 @@
     ['#btnSave', '#btnSaveOpen', '#btnSaveOpen2'].forEach(function (s) {
       var b = $(s); if (b && !settled) b.classList.remove('hidden');
     });
+    if (needPnl) {
+      /* 解冻「算式」的输入项：开仓价、实际开仓仓位、实际出场仓位、每手乘数、以及盈亏框本身。
+         出场价（#f_exit）不解冻 —— 它正是判定关仓的依据，属于已经发生的事实。
+         盈亏框也放开：手动值优先 / 清空即交还自动重算，这条契约在补算时同样成立。 */
+      ['#f_entry', '#f_openSize', '#f_closeSize', '#f_multiplier', '#f_pnl']
+        .forEach(function (s) { $(s).disabled = false; });
+    }
+    if (needCat) {
+      ['#f_market', '#f_holdDays', '#f_lesson'].forEach(function (s) { $(s).disabled = false; });
+      $$('#catPicker .cat-opt').forEach(function (b) { b.disabled = false; });
+    }
+    if (needCat || needPnl) {
+      var bs = $('#btnSave'); if (bs) bs.classList.remove('hidden');
+      var bo2 = $('#btnSaveOpen2'); if (bo2) bo2.classList.add('hidden');   // 已关仓了，谈不上「存为持仓」
+    }
     var note = $('#settledNote');
     if (note) {
       note.classList.toggle('hidden', !settled);
-      note.innerHTML = settled
-        ? '<strong>这笔已关仓结算，仅供查看，不能修改。</strong>结算之后它就是历史 —— 事后改动不会让复盘更准，只会让数据说谎。'
-        : '';
+      note.innerHTML = !settled ? '' : ((needCat || needPnl)
+        ? '<strong>这笔已关仓，但还没写完整。</strong>' +
+          (needPnl ? '盈亏没结算出来 —— 补上<b>实际开仓价</b>（仓位不对也一并改），金额会自动算出；' : '') +
+          (needCat ? '归类还空着 —— 它是月度复盘必填项；' : '') +
+          '其余字段（偏差、状态、计划）仍然冻结，不能改。'
+        : '<strong>这笔已关仓结算，仅供查看，不能修改。</strong>结算之后它就是历史 —— 事后改动不会让复盘更准，只会让数据说谎。');
     }
     return settled;
   }
@@ -700,18 +755,25 @@
     var box = $('#pnlPreview');
     if (x == null) { box.innerHTML = '未关仓 · 填了「实际出场价」之后才会结算盈亏得失。'; return; }
     if (e == null || q == null) { box.innerHTML = '还需补上实际开仓价与实际仓位，才能算出盈亏。'; return; }
-    var v = ($('#f_direction').value === 'short' ? (e - x) : (x - e)) * q * mult;
+    var short = $('#f_direction').value === 'short';
+    var v = (short ? (e - x) : (x - e)) * q * mult;
     var manual = num('#f_pnl');
-    box.innerHTML = '结算：（' + e + ' − ' + x + '）× ' + q + (mult !== 1 ? ' × ' + mult : '') + ' = <b style="color:' +
+    /* 公式按方向展开显示，让「算式」和「结果」的符号一致 ——
+       否则做多时会看到 (33.5 − 31) × 500 = −1250 这种自相矛盾的一行 */
+    var f = short ? '(' + e + ' − ' + x + ')' : '(' + x + ' − ' + e + ')';
+    box.innerHTML = '结算：' + f + ' × ' + q + (mult !== 1 ? ' × ' + mult : '') + ' = <b style="color:' +
       (v >= 0 ? 'var(--up)' : 'var(--down)') + '">' + money(v) + '</b>' +
-      (manual != null && Math.round(manual) !== Math.round(v) ? ' <span style="color:var(--warn)">（已手动覆盖为 ' + money(manual) + '）</span>' : '');
+      (manual != null && Math.round(manual) !== Math.round(v) ? ' <span style="color:var(--warn)">（已手动改为 ' + money(manual) + '）</span>' : '');
   }
 
   function autoPnl() {
     var e = num('#f_entry'), x = num('#f_exit');
     var q = num('#f_closeSize') != null ? num('#f_closeSize') : num('#f_openSize');
     var mult = num('#f_multiplier') != null ? num('#f_multiplier') : 1;
-    if (e != null && x != null && q != null && $('#f_pnl').value.trim() === '') {
+    /* 只要没被手动改过，盈亏就跟着价格实时重算。
+       旧写法是「框里有值就不算」—— 那会让自动算出的旧值卡死：
+       改完出场价，金额纹丝不动，看起来就像算错了。 */
+    if (e != null && x != null && q != null && !pnlManual) {
       var v = ($('#f_direction').value === 'short' ? (e - x) : (x - e)) * q * mult;
       $('#f_pnl').value = Math.round(v * 100) / 100;
     }
@@ -803,10 +865,80 @@
     return t;
   }
 
+  /* 已关仓的「补归类」：只写复盘这一块，绝不碰价格/偏差/状态/计划 —— 那些是冻结的历史。
+     与 collect() 的区别正在于此：collect() 见 isClosed 直接 return，是给正常录入用的。 */
+  function collectReview(t) {
+    if (!t) return null;
+    t.review = t.review || {};
+    var sel = $('#catPicker .cat-opt.sel');
+    if (sel) t.review.cat = sel.dataset.cat;
+    t.review.market = $('#f_market').value;
+    var hd = num('#f_holdDays');
+    if (hd == null) hd = daysBetween(t.date, t.exec && t.exec.closeDate);
+    t.review.holdDays = hd;
+    t.review.lesson = $('#f_lesson').value.trim();
+    t.review.filledAt = nowStr();
+    t.updatedAt = nowStr();
+    return t;
+  }
+
+  /* 已关仓的「补算盈亏」：和补归类同理，只补算式缺的那几个输入 —— 开仓价、实际仓位、每手乘数。
+     绝不碰计划 / 偏差 / 状态 / 归类，也不碰出场价（它是判定关仓的依据，属于已发生的事实）。
+     触发前提是「有出场价、却算不出钱」，也就是缺输入，而不是要推翻当年的结果。 */
+  function collectPnl(t) {
+    if (!t) return null;
+    t.exec = t.exec || {};
+    var e = num('#f_entry');
+    if (e != null) t.exec.entry = e;
+    var os = num('#f_openSize'); if (os != null) t.exec.openSize = os;
+    var cs = num('#f_closeSize'); if (cs != null) t.exec.closeSize = cs;   // 部分平仓时它才是算式里的份数
+    var m = num('#f_multiplier'); if (m != null) t.exec.multiplier = m;
+    /* 优先用框里自动算好的数（autoPnl 已随输入实时更新）；
+       框里空着就按同一套公式现算一遍，免得「算得出来却提示算不出来」。 */
+    var p = num('#f_pnl');
+    if (p == null) {
+      var x = t.exec.exit;
+      var q = t.exec.closeSize != null ? t.exec.closeSize : t.exec.openSize;
+      var mult = t.exec.multiplier != null ? t.exec.multiplier : 1;
+      if (t.exec.entry != null && x != null && q != null) {
+        p = (t.direction === 'short' ? (t.exec.entry - x) : (x - t.exec.entry)) * q * mult;
+        p = Math.round(p * 100) / 100;
+      }
+    }
+    t.exec.pnl = isPnlNum(p) ? p : null;   // 还是算不出就老实留 null，别编一个 0 出来
+    t.updatedAt = nowStr();
+    return t;
+  }
+
   function saveTrade(forceOpen) {
     var t = editingId ? byId(editingId) : null;
     if (!t || !t.plan || !t.plan.lockedAt) { alert('计划还没锁定。没有事前写下来的条件，这笔记录就没有意义。'); gotoStep(1); return; }
-    if (isClosed(t)) { alert('这笔已关仓结算，不能再修改。\n\n结算之后它就是历史 —— 要更正请重新录入一笔。'); return; }
+    if (isClosed(t)) {
+      /* 已关仓的两个例外，都是「没写完」：盈亏没算出来、归类空着。
+         先补盈亏再补归类 —— 归类建议要拿金额当依据；计划 / 偏差 / 状态 一律不动。 */
+      var done = [];
+      if (needPnlOf(t)) {
+        collectPnl(t);
+        if (!isPnlNum(t.exec && t.exec.pnl)) {
+          alert('还差一样东西：这笔有出场价，却没有「实际开仓价」或「实际开仓仓位」。\n\n补上它，盈亏才结算得出来。');
+          gotoStep(2);
+          return;
+        }
+        done.push('盈亏 ' + money(t.exec.pnl));
+      }
+      if (!(t.review && t.review.cat)) {
+        collectReview(t);
+        if (!t.review.cat) { alert('先四选一贴个标签 —— 归类是复盘要用的必填项，少了它这笔在月度复盘里就等于不存在。'); gotoStep(4); return; }
+        done.push('归类「' + t.review.cat + '」');
+      }
+      if (!done.length) {
+        alert('这笔已关仓结算，不能再修改。\n\n要更正请用左下角「删除这笔」删掉重录。');
+        return;
+      }
+      save(); closeModal(true); renderAll();
+      toast('已补上 ' + done.join(' · '));
+      return;
+    }
     collect(t);
     if (t.status === 'open') {
       t.exec.pnl = null;
@@ -816,19 +948,38 @@
       gotoStep(4);
       return;
     }
-    save(); closeModal(); renderAll();
+    save(); closeModal(true); renderAll();
   }
 
-  function closeModal() {
+  /* force=true 用于「程序自己关窗」（保存成功、删除之后）；用户手点 × / 点遮罩 / 按 ESC 时走确认。
+     ⚠️ 必须显式传参：把 closeModal 直接当 click 监听器用的话，事件对象会被当成 force。 */
+  function closeModal(force) {
     var t = editingId ? byId(editingId) : null;
+    var unlocked = !(t && t.plan && t.plan.lockedAt);
+    /* 防手滑：新建的草稿、或计划还没锁的记录，关窗等于把刚写的东西全丢掉（没有事前条件，系统不收这笔）。
+       有内容才拦，空手关窗不多问。 */
+    if (!force && unlocked && !(t && isClosed(t))) {
+      var typed = $('#f_symbol').value.trim() || $('#f_trigger').value.trim() || $('#f_planStop').value.trim();
+      if (typed && !confirm('这一步还没锁定 —— 关掉的话刚写的内容不会保存。\n\n确定关闭？')) return;
+    }
     if (t && t.plan && t.plan.lockedAt && !isClosed(t)) {   // 锁定过的记录，关窗即落盘（已结算的不写）
       collect(t);
       if (t.status === 'open') t.exec.pnl = null;
       save();
     }
+    /* 关窗后留下「没写完」的记录 —— 不拦人，但要说清怎么补 */
+    var needCat = !!(t && isClosed(t) && !(t.review && t.review.cat));
+    var needPnl = needPnlOf(t);
     $('#modalMask').classList.add('hidden');
     editingId = null;
     renderAll();
+    if (needCat || needPnl) {
+      var id = t.id;
+      var msg = needPnl
+        ? '这笔已关仓，但盈亏没算出来（缺开仓价或仓位）'
+        : '这笔已关仓，但还没归类 —— 归类是复盘必填项';
+      toast(msg, '现在补', function () { openModal(id, 'open'); });
+    }
   }
 
   /* ---------------- 月度复盘 ---------------- */
@@ -1363,8 +1514,8 @@
 
     $('#btnNew').addEventListener('click', function () { openModal(null, 'open'); });
     $('#btnClosePos').addEventListener('click', function () { openModal(null, 'close'); });
-    $('#btnCloseModal').addEventListener('click', closeModal);
-    $('#modalMask').addEventListener('click', function (e) { if (e.target === $('#modalMask')) closeModal(); });
+    $('#btnCloseModal').addEventListener('click', function () { closeModal(false); });
+    $('#modalMask').addEventListener('click', function (e) { if (e.target === $('#modalMask')) closeModal(false); });
 
     $('#btnLock').addEventListener('click', lockPlan);
     $('#btnGotoClose').addEventListener('click', function () { gotoStep(2); });
@@ -1376,8 +1527,15 @@
 
     $$('#stepBar .step').forEach(function (b) {
       b.addEventListener('click', function () {
-        if (b.classList.contains('locked')) { alert('先把第 1 步的开仓计划锁定。'); return; }
-        gotoStep(Number(b.dataset.step));
+        var n = Number(b.dataset.step);
+        var t = editingId ? byId(editingId) : null;
+        /* 按当前这笔的真实状态判断，而不是看那个静态 class（它以前从不同步，导致 tab 永远点不动） */
+        if (n > 1 && !(t && t.plan && t.plan.lockedAt)) {
+          alert('先把第 1 步的开仓计划锁定 —— 锁定之后 2/3/4 步就会打开。');
+          gotoStep(1);
+          return;
+        }
+        gotoStep(n);
       });
     });
     $$('[data-nav]').forEach(function (b) {
@@ -1386,7 +1544,21 @@
 
     ['#f_planSize', '#f_openSize', '#f_realStop', '#f_planStop', '#f_entry', '#f_exit', '#f_closeSize', '#f_multiplier', '#f_direction']
       .forEach(function (s) { $(s).addEventListener('input', function () { syncOpenCompare(); syncCloseCompare(); autoPnl(); }); });
-    $('#f_pnl').addEventListener('input', function () { syncPnlPreview(); syncCatSuggest(); });
+    $('#f_pnl').addEventListener('input', function () {
+      /* 手动填过 → 保留手动值；清空 → 交还给自动重算 */
+      pnlManual = $('#f_pnl').value.trim() !== '';
+      syncPnlPreview(); syncCatSuggest();
+    });
+    $('#btnDelete').addEventListener('click', function () {
+      var t = editingId ? byId(editingId) : null;
+      if (!t) return;
+      var label = (t.symbol || '(未填标的)') + ' · ' + (t.date || '');
+      if (!confirm('删除这笔记录？\n\n' + label + '\n\n删除后无法撤销（除非你手上有备份文件）。')) return;
+      editingId = null;     // 先断开编辑态，避免关窗时又把它写回去
+      store = store.filter(function (x) { return x.id !== t.id; });
+      save(); closeModal(true); renderAll();
+      toast('已删除「' + (t.symbol || '未填标的') + '」这笔记录');
+    });
     $('#devChecks').addEventListener('change', function (e) {
       normalizeDevs(e.target);          // 「无偏差」与具体偏差项互斥
       syncCloseCompare(); autoPnl(); syncCatSuggest();
@@ -1513,7 +1685,7 @@
     document.addEventListener('keydown', function (e) {
       if (e.key !== 'Escape') return;
       if (!$('#exportMask').classList.contains('hidden')) { hideExportPanel(); return; }
-      if (!$('#modalMask').classList.contains('hidden')) closeModal();
+      if (!$('#modalMask').classList.contains('hidden')) closeModal(false);   // ESC 也算手滑
     });
   }
 
